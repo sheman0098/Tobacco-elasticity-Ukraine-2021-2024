@@ -325,10 +325,7 @@ all_real_prices <- bind_rows(
   tobacco_real_prices,
   alcohol_real_prices,
   t_and_a_real_prices
-) %>%
-  dplyr::filter(
-    stringr::str_detect(period_id, "^(2021Q|2024_SURVEY)")
-  )
+)
 
 # Create summary by product category and period
 price_summary <- all_real_prices %>%
@@ -391,7 +388,7 @@ real_price_plot <- ggplot(
     values = c(
       "tobacco" = "#D55E00",
       "alcohol" = "#0072B2",
-      "tobacco_and_alcohol_combined" = "#009E73"
+      "tobacco & alcohol" = "#009E73"
     ),
     labels = c("Tobacco", "Alcohol", "Tobacco & Alcohol Combined")
   )
