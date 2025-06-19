@@ -94,6 +94,10 @@ t_and_a_cpi <- cpi_processed %>%
   dplyr::filter(product_type == "Алкогольні напої, тютюнові вироби") %>%
   dplyr::filter(base_period %in% c("До попереднього місяця"))
 
+alc_cpi <- cpi_processed %>%
+  dplyr::filter(product_type == "Алкогольні напої") %>%
+  dplyr::filter(base_period %in% c("До попереднього місяця"))
+
 gen_cpi <- cpi_processed %>%
   dplyr::filter(product_type == "Індекс споживчих цін") %>%
   dplyr::filter(base_period %in% c("До попереднього місяця"))
@@ -150,11 +154,21 @@ tobacco_periods <- calculate_mixed_periods_regional(
   tobacco_cpi,
   "Тютюнові вироби"
 )
+
 t_and_a_periods <- calculate_mixed_periods_regional(
   t_and_a_cpi,
   "Алкогольні напої, тютюнові вироби"
 )
-gen_periods <- calculate_mixed_periods_regional(gen_cpi, "Індекс споживчих цін")
+
+alc_periods <- calculate_mixed_periods_regional(
+  alc_cpi,
+  "Алкогольні напої"
+)
+
+gen_periods <- calculate_mixed_periods_regional(
+  gen_cpi,
+  "Індекс споживчих цін"
+)
 
 
 ### Load and process the average price data ###
@@ -175,3 +189,12 @@ avg_price_data_clean <- avg_price_data %>%
       "Показник"
     )
   )
+
+glimpse(avg_price_data_clean)
+unique(avg_price_data_clean$Періодичність)
+unique(avg_price_data_clean$`Тип товарів і послуг`)
+
+glimpse(tobacco_periods)
+glimpse(t_and_a_periods)
+glimpse(alc_periods)
+glimpse(gen_periods)
