@@ -32,6 +32,11 @@ unicef_24_h <- read_excel(
   skip = 4
 )
 
+unicef_24_m <- read_excel(
+  "unicef_data/teams-UKR-PrgmEff-UCO KnowledgeUNICEF-SESHS IND 10042024 FIN-2.0.xlsx",
+  skip = 3
+)
+
 
 ### Load and process the CPI data ###
 
@@ -394,3 +399,110 @@ real_price_plot <- ggplot(
   )
 
 print(real_price_plot)
+
+
+### Main data processing ###
+
+ssu_smokers <- ssu_21_w %>%
+  group_by(code_fam) %>%
+  summarise(
+    n_smokers = sum(smoking == 1, na.rm = TRUE),
+    # Get info for household head (assuming first member listed is head)
+    head_sex = dplyr::first(SEX),
+    head_age_cat = dplyr::first(age),
+    head_educ = dplyr::first(L_EDUC_M)
+  ) %>%
+  mutate(
+    # Harmonize head's sex to match UNICEF (1=Male, 2=Female)
+    head_sex = case_when(
+      head_sex == 1 ~ "Male",
+      head_sex == 2 ~ "Female",
+      TRUE ~ NA_character_
+    )
+  )
+
+ssu_21_processed <- ssu_21_h %>%
+  left_join(ssu_smokers, by = "code_fam") %>%
+  transmute(
+    hh_id = as.character(code_fam),
+    weight = w_q,
+    region = case_when(
+      cod_obl == 5 ~ "Вінницька",
+      cod_obl == 7 ~ "Волинська",
+      cod_obl == 12 ~ "Дніпропетровська",
+      cod_obl == 14 ~ "Донецька",
+      cod_obl == 18 ~ "Житомирська",
+      cod_obl == 21 ~ "Закарпатська",
+      cod_obl == 23 ~ "Запорізька",
+      cod_obl == 26 ~ "Івано-Франківська",
+      cod_obl == 32 ~ "Київська",
+      cod_obl == 35 ~ "Кіровоградська",
+      cod_obl == 44 ~ "Луганська",
+      cod_obl == 46 ~ "Львівська",
+      cod_obl == 48 ~ "Миколаївська",
+      cod_obl == 51 ~ "Одеська",
+      cod_obl == 53 ~ "Полтавська",
+      cod_obl == 56 ~ "Рівненська",
+      cod_obl == 59 ~ "Сумська",
+      cod_obl == 61 ~ "Тернопільська",
+      cod_obl == 63 ~ "Харківська",
+      cod_obl == 65 ~ "Херсонська",
+      cod_obl == 68 ~ "Хмельницька",
+      cod_obl == 71 ~ "Черкаська",
+      cod_obl == 73 ~ "Чернівецька",
+      cod_obl == 74 ~ "Чернігівська",
+      cod_obl == 80 ~ "м. Київ",
+      TRUE ~ "Інша"
+    ),
+
+    settlement_type = case_when(
+      tp_ns_p %in% c(1, 2) ~ "Urban",
+      tp_ns_p == 3 ~ "Rural",
+      TRUE ~ NA_character_
+    ),
+
+    hh_size = hsize,
+    has_children = ifelse(
+      type_dom == 1,
+      1,
+      0
+    ),
+
+    head_sex,
+    head_age_cat,
+    head_educ,
+    n_smokers,
+
+    # --- AIDS Expenditure Categories (Nominal) ---
+    exp_food = h01,
+    exp_tobacco = h0221,
+    exp_alcohol = h0211 + h0212 + h0213,
+    # "Other" is Total Consumption minus Food, Alcohol, and Tobacco
+    exp_other = h00 - (h01 + h0221 + h0211 + h0212 + h0213),
+    # Total consumption expenditure for budget shares
+    exp_total_consumption = h00,
+    income_total = totalinc,
+
+    period_id = kvart_kd,
+    year = "2021"
+  )
+
+unicef_head_info <- unicef_24_m %>%
+  dplyr::filter(IND_A1 == 1) %>%
+  transmute(
+    hh_id = as.character(KEY_QUEST),
+    head_sex = case_when(
+      IND_A3 == 1 ~ "Male",
+      IND_A3 == 2 ~ "Female",
+      TRUE ~ NA_character_
+    ),
+    head_age_cat = case_when(
+      IND_A2 < 18 ~ 1,
+      IND_A2 >= 18 & IND_A2 <= 35 ~ 2,
+      IND_A2 >= 36 & IND_A2 <= 55 ~ 3,
+      IND_A2 >= 56 & IND_A2 <= 59 ~ 4,
+      IND_A2 >= 60 ~ 5,
+      TRUE ~ NA_real_
+    ),
+    head_educ = IND_A7
+  )
