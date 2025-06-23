@@ -488,13 +488,13 @@ ssu_21_processed <- ssu_21_h %>%
   )
 
 unicef_head_info <- unicef_24_m %>%
-  dplyr::filter(IND_A1 == 1) %>%
+  dplyr::filter(memb == 1) %>%
   transmute(
     hh_id = as.character(KEY_QUEST),
     head_sex = case_when(
-      IND_A3 == 1 ~ "Male",
-      IND_A3 == 2 ~ "Female",
-      TRUE ~ NA_character_
+      IND_A3 == "чоловіча" ~ 1,
+      IND_A3 == "жіноча" ~ 2,
+      TRUE ~ NA_real_ # Changed to NA_real_ for numeric consistency
     ),
     head_age_cat = case_when(
       IND_A2 < 18 ~ 1,
@@ -505,4 +505,167 @@ unicef_head_info <- unicef_24_m %>%
       TRUE ~ NA_real_
     ),
     head_educ = IND_A7
+  )
+
+
+unicef_24_processed <- unicef_24_h %>%
+  left_join(unicef_head_info, by = c("KEY_QUEST" = "hh_id")) %>%
+  # Ensure all columns used for calculation are numeric.
+  mutate(across(
+    .cols = c(starts_with("G"), "V1", "dity_n", "hh_size", "WGT_Fin_NEW"),
+    .fns = as.numeric
+  )) %>%
+  # Use coalesce to handle heating vs. non-heating utility costs
+  mutate(
+    exp_utilities = coalesce(G3_2_1, G3_2_2)
+  ) %>%
+  rowwise() %>%
+  mutate(
+    # --- AIDS Expenditure Categories (Nominal) ---
+    exp_food = G1_1,
+    # This dataset combines Alcohol and Tobacco
+    exp_tobacco_alcohol = G1_9,
+    # Sum all other consumption expenditure items explicitly
+    exp_other = sum(
+      c(
+        # Non-food goods
+        G2_3_1,
+        G2_3_2,
+        G2_3_3,
+        G2_3_4,
+        G2_3_5,
+        G2_3_6,
+        G2_3_7,
+        G2_3_8,
+        G2_3_9,
+        G2_3_10,
+        # Medical
+        G2_5_1,
+        G2_5_2,
+        G2_5_3,
+        G2_5_4,
+        G2_5_5,
+        # Education
+        G2_8_1,
+        G2_8_2,
+        G2_8_3,
+        G2_8_4,
+        G2_8_5,
+        # Education
+        G2_8_6,
+        # Recreation
+        G2_11,
+        # Transport
+        G2_13_1,
+        G2_13_2,
+        # Services
+        G2_15_1_2,
+        G2_15_2_2,
+        G2_15_3_2,
+        G2_15_4_2,
+        G2_15_5_2,
+        G2_15_6_2,
+        # More Services
+        G2_15_7_2,
+        G2_15_8_2,
+        G2_15_9_2,
+        G2_15_10_2,
+        G2_15_11_2,
+        # Rent
+        G3_1,
+        # Housing utilities
+        exp_utilities
+      ),
+      na.rm = TRUE
+    ),
+
+    # Calculate total consumption for budget shares
+    exp_total_consumption = sum(
+      exp_food,
+      exp_tobacco_alcohol,
+      exp_other,
+      na.rm = TRUE
+    )
+  ) %>%
+  ungroup() %>%
+  transmute(
+    hh_id = KEY_QUEST,
+    weight = WGT_Fin_NEW,
+    region = OBLAST,
+    settlement_type = SETTL_TYPE,
+    hh_size = hh_size,
+    is_idp = ifelse(D1_Mult9 == "Так", 1, 0), # IDP status
+    has_children = ifelse(dity_n > 0, 1, 0),
+    head_sex,
+    head_age_cat,
+    head_educ,
+
+    # Expenditures
+    exp_food,
+    exp_tobacco_alcohol,
+    exp_other,
+    exp_total_consumption,
+    income_total = V1,
+
+    period_id = "2024_SURVEY_DEC23_FEB24",
+    year = "2024"
+  ) %>%
+  # Harmonize region and settlement_type columns to match ssu_21_processed
+  mutate(
+    region = case_when(
+      stringr::str_starts(region, "Вінницька") ~ "Вінницька",
+      stringr::str_starts(region, "Волинська") ~ "Волинська",
+      stringr::str_starts(region, "Дніпропетровська") ~ "Дніпропетровська",
+      stringr::str_starts(region, "Донецька") ~ "Донецька",
+      stringr::str_starts(region, "Житомирська") ~ "Житомирська",
+      stringr::str_starts(region, "Закарпатська") ~ "Закарпатська",
+      stringr::str_starts(region, "Запорізька") ~ "Запорізька",
+      stringr::str_starts(region, "Івано-Франківська") ~ "Івано-Франківська",
+      stringr::str_starts(region, "Київська") ~ "Київська",
+      stringr::str_starts(region, "Кіровоградська") ~ "Кіровоградська",
+      stringr::str_starts(region, "Луганська") ~ "Луганська",
+      stringr::str_starts(region, "Львівська") ~ "Львівська",
+      stringr::str_starts(region, "Миколаївська") ~ "Миколаївська",
+      stringr::str_starts(region, "Одеська") ~ "Одеська",
+      stringr::str_starts(region, "Полтавська") ~ "Полтавська",
+      stringr::str_starts(region, "Рівненська") ~ "Рівненська",
+      stringr::str_starts(region, "Сумська") ~ "Сумська",
+      stringr::str_starts(region, "Тернопільська") ~ "Тернопільська",
+      stringr::str_starts(region, "Харківська") ~ "Харківська",
+      stringr::str_starts(region, "Херсонська") ~ "Херсонська",
+      stringr::str_starts(region, "Хмельницька") ~ "Хмельницька",
+      stringr::str_starts(region, "Черкаська") ~ "Черкаська",
+      stringr::str_starts(region, "Чернівецька") ~ "Чернівецька",
+      stringr::str_starts(region, "Чернігівська") ~ "Чернігівська",
+      stringr::str_starts(region, "м. Київ") ~ "м. Київ",
+      TRUE ~ region
+    )
+  )
+
+
+### Deflate SSU and UNICEF Data using CPI ###
+
+cpi_2021_annual <- gen_periods %>%
+  dplyr::filter(grepl("2021Q", period_id)) %>%
+  group_by(region) %>%
+  summarise(cpi_indexed = mean(cpi_indexed, na.rm = TRUE)) %>%
+  mutate(period_id = "2021_ANNUAL")
+
+cpi_unicef_survey <- gen_periods %>%
+  dplyr::filter(period_id == "2024_SURVEY_DEC23_FEB24") %>%
+  select(region, period_id, cpi_indexed)
+
+cpi_for_merge <- bind_rows(cpi_2021_annual, cpi_unicef_survey)
+
+# Deflate SSU Data
+ssu_final <- ssu_21_processed %>%
+  left_join(cpi_for_merge, by = c("region", "period_id")) %>%
+  mutate(
+    deflator = cpi_indexed / 100,
+    exp_food_real = exp_food / deflator,
+    exp_tobacco_real = exp_tobacco / deflator,
+    exp_alcohol_real = exp_alcohol / deflator,
+    exp_other_real = exp_other / deflator,
+    exp_total_consumption_real = exp_total_consumption / deflator,
+    income_total_real = income_total / deflator
   )
