@@ -44,136 +44,92 @@ cpi_data <- read_excel(
   "price_data/dataset_2025-06-18T13_53_54.269907203Z_DEFAULT_INTEGRATION_SSSU_DF_PRICE_CHANGE_CONSUMER_GOODS_SERVICE_24.0.0.xlsx"
 )
 
-cpi_data_clean <- cpi_data %>%
-  dplyr::mutate(
-    Рік = as.numeric(stringr::str_sub(Період, 1, 4)),
-    Місяць = as.numeric(stringr::str_sub(Період, 7, 8))
-  ) %>%
-  dplyr::filter(Рік %in% c(2021:2024)) %>%
-  dplyr::filter(Періодичність == "Місячна")
-
-glimpse(cpi_data_clean)
-unique(cpi_data_clean$`Базисний період`)
-unique(cpi_data_clean$`Тип товарів і послуг`)
-
-
-cpi_processed <- cpi_data_clean %>%
-  # Convert observation values to numeric
+cpi_processed <- cpi_data %>%
   mutate(
+    year = as.numeric(stringr::str_sub(Період, 1, 4)),
+    month = as.numeric(stringr::str_sub(Період, 7, 8)),
     region = `Територіальний розріз`,
     cpi_value = as.numeric(`Значення cпостереження`),
-    year = Рік,
-    month = Місяць,
-    base_period = `Базисний період`,
-    product_type = `Тип товарів і послуг`,
+    product_type = `Тип товарів і послуг`
   ) %>%
-  # Create date variable
-  mutate(date = ymd(paste(year, month, "01", sep = "-"))) %>%
-  # Filter out missing values
-  dplyr::filter(!is.na(cpi_value)) %>%
-  select(
-    -c(
-      `Значення cпостереження`,
-      Показник,
-      Рік,
-      Місяць,
-      Період,
-      `Базисний період`,
-      `Тип товарів і послуг`,
-      `Територіальний розріз`,
-      Періодичність
-    )
-  )
+  filter(
+    year %in% c(2021:2024),
+    Періодичність == "Місячна",
+    `Базисний період` == "До попереднього місяця",
+    !is.na(cpi_value)
+  ) %>%
+  select(region, year, month, cpi_value, product_type)
 
-# Check the data structure
-cpi_processed %>%
-  count(product_type, base_period) %>%
-  print(n = Inf)
-
-
-tobacco_cpi <- cpi_processed %>%
-  dplyr::filter(product_type == "Тютюнові вироби") %>%
-  dplyr::filter(base_period %in% c("До попереднього місяця"))
-
-t_and_a_cpi <- cpi_processed %>%
-  dplyr::filter(product_type == "Алкогольні напої, тютюнові вироби") %>%
-  dplyr::filter(base_period %in% c("До попереднього місяця"))
-
-alc_cpi <- cpi_processed %>%
-  dplyr::filter(product_type == "Алкогольні напої") %>%
-  dplyr::filter(base_period %in% c("До попереднього місяця"))
-
-gen_cpi <- cpi_processed %>%
-  dplyr::filter(product_type == "Індекс споживчих цін") %>%
-  dplyr::filter(base_period %in% c("До попереднього місяця"))
-
-# Calculate CPI with regional variation preserved
-calculate_mixed_periods_regional <- function(monthly_cpi_data, product_name) {
-  # First create cumulative index BY REGION
+# Function to create indexed CPI for different time periods
+calculate_mixed_periods_regional <- function(monthly_cpi_data) {
   monthly_indexed <- monthly_cpi_data %>%
     arrange(region, year, month) %>%
-    group_by(region) %>% # KEY: Group by region first
+    group_by(region) %>%
     mutate(
       growth_factor = cpi_value / 100,
       cpi_cumulative = 100 * cumprod(growth_factor)
     ) %>%
     ungroup()
-
-  # Standard quarterly periods BY REGION
   quarterly <- monthly_indexed %>%
     mutate(quarter = ceiling(month / 3)) %>%
-    dplyr::filter(
-      !(year == 2023 & month == 12) & !(year == 2024 & month %in% 1:2)
-    ) %>%
-    group_by(region, year, quarter) %>% # Group by region AND time
-    summarise(period_cpi = mean(cpi_cumulative), .groups = 'drop') %>%
+    filter(!(year == 2023 & month == 12) & !(year == 2024 & month %in% 1:2)) %>%
+    group_by(region, year, quarter) %>%
+    summarise(cpi_indexed = mean(cpi_cumulative), .groups = 'drop') %>%
     mutate(period_id = paste0(year, "Q", quarter))
-
-  # Special survey period (Dec 2023 - Feb 2024) BY REGION
   survey_period <- monthly_indexed %>%
-    dplyr::filter(
-      (year == 2023 & month == 12) | (year == 2024 & month %in% 1:2)
-    ) %>%
-    group_by(region) %>% # Group by region
-    summarise(period_cpi = mean(cpi_cumulative), .groups = 'drop') %>%
+    filter((year == 2023 & month == 12) | (year == 2024 & month %in% 1:2)) %>%
+    group_by(region) %>%
+    summarise(cpi_indexed = mean(cpi_cumulative), .groups = 'drop') %>%
     mutate(period_id = "2024_SURVEY_DEC23_FEB24")
-
-  # Combine results, maintaining regional structure
-  combined <- bind_rows(
-    quarterly %>% select(region, period_id, period_cpi),
-    survey_period %>% select(region, period_id, period_cpi)
-  ) %>%
-    # Index to Q1 2021 = 100 FOR EACH REGION SEPARATELY
+  combined <- bind_rows(quarterly, survey_period) %>%
     group_by(region) %>%
     mutate(
-      base_value = period_cpi[period_id == "2021Q1"],
-      cpi_indexed = (period_cpi / base_value) * 100,
-      product_type = product_name
+      base_value = cpi_indexed[period_id == "2021Q1"],
+      cpi_rebased = (cpi_indexed / base_value) * 100
     ) %>%
-    ungroup()
-
+    ungroup() %>%
+    select(region, period_id, cpi_rebased)
   return(combined)
 }
 
-tobacco_periods <- calculate_mixed_periods_regional(
-  tobacco_cpi,
-  "Тютюнові вироби"
+# Create indexed CPI for each category
+categories <- list(
+  "Індекс споживчих цін" = "cpi_general",
+  "Алкогольні напої, тютюнові вироби" = "cpi_t_a",
+  "Алкогольні напої" = "cpi_alcohol",
+  "Тютюнові вироби" = "cpi_tobacco"
 )
 
-t_and_a_periods <- calculate_mixed_periods_regional(
-  t_and_a_cpi,
-  "Алкогольні напої, тютюнові вироби"
-)
+all_cpi_indexed <- names(categories) %>%
+  map(
+    ~ {
+      cpi_processed %>%
+        filter(product_type == .x) %>%
+        calculate_mixed_periods_regional() %>%
+        rename(!!categories[[.x]] := cpi_rebased)
+    }
+  ) %>%
+  reduce(full_join, by = c("region", "period_id"))
 
-alc_periods <- calculate_mixed_periods_regional(
-  alc_cpi,
-  "Алкогольні напої"
-)
+# Extract national-level data to be used as a fallback
+national_fallback_cpi <- all_cpi_indexed %>%
+  filter(region == "Україна") %>%
+  select(
+    period_id,
+    national_cpi_alcohol = cpi_alcohol,
+    national_cpi_tobacco = cpi_tobacco
+  )
 
-gen_periods <- calculate_mixed_periods_regional(
-  gen_cpi,
-  "Індекс споживчих цін"
-)
+# Join the national fallbacks and use coalesce to fill in NAs directly into the main CPI table
+all_cpi_indexed <- all_cpi_indexed %>%
+  left_join(national_fallback_cpi, by = "period_id") %>%
+  mutate(
+    cpi_alcohol = coalesce(cpi_alcohol, national_cpi_alcohol),
+    cpi_tobacco = coalesce(cpi_tobacco, national_cpi_tobacco)
+  ) %>%
+  # Clean up the temporary national columns and filter out the national aggregate row
+  select(-national_cpi_alcohol, -national_cpi_tobacco) %>%
+  filter(region != "Україна")
 
 
 ### Load and process the average price data ###
@@ -200,16 +156,6 @@ avg_price_data_clean <- avg_price_data %>%
 glimpse(avg_price_data_clean)
 unique(avg_price_data_clean$Періодичність)
 unique(avg_price_data_clean$`Тип товарів і послуг`)
-
-glimpse(tobacco_periods)
-glimpse(t_and_a_periods)
-glimpse(alc_periods)
-glimpse(gen_periods)
-
-unique(tobacco_periods$region)
-unique(t_and_a_periods$region)
-unique(alc_periods$region)
-unique(gen_periods$region)
 
 
 ### Process average price data and calculate real prices ###
@@ -483,9 +429,10 @@ ssu_21_processed <- ssu_21_h %>%
     exp_total_consumption = h00,
     income_total = totalinc,
 
-    period_id = kvart_kd,
+    kvart = kvart_kd,
     year = "2021"
-  )
+  ) %>%
+  mutate(period_id = paste0(year, "Q", kvart))
 
 unicef_head_info <- unicef_24_m %>%
   dplyr::filter(memb == 1) %>%
@@ -645,27 +592,47 @@ unicef_24_processed <- unicef_24_h %>%
 
 ### Deflate SSU and UNICEF Data using CPI ###
 
-cpi_2021_annual <- gen_periods %>%
-  dplyr::filter(grepl("2021Q", period_id)) %>%
-  group_by(region) %>%
-  summarise(cpi_indexed = mean(cpi_indexed, na.rm = TRUE)) %>%
-  mutate(period_id = "2021_ANNUAL")
-
-cpi_unicef_survey <- gen_periods %>%
-  dplyr::filter(period_id == "2024_SURVEY_DEC23_FEB24") %>%
-  select(region, period_id, cpi_indexed)
-
-cpi_for_merge <- bind_rows(cpi_2021_annual, cpi_unicef_survey)
-
-# Deflate SSU Data
+# Deflate SSU Data using specific CPIs
 ssu_final <- ssu_21_processed %>%
-  left_join(cpi_for_merge, by = c("region", "period_id")) %>%
+  left_join(all_cpi_indexed, by = c("region", "period_id")) %>%
   mutate(
-    deflator = cpi_indexed / 100,
-    exp_food_real = exp_food / deflator,
-    exp_tobacco_real = exp_tobacco / deflator,
-    exp_alcohol_real = exp_alcohol / deflator,
-    exp_other_real = exp_other / deflator,
-    exp_total_consumption_real = exp_total_consumption / deflator,
-    income_total_real = income_total / deflator
+    exp_food_real = exp_food / (cpi_general / 100),
+    exp_tobacco_real = exp_tobacco / (cpi_tobacco / 100),
+    exp_alcohol_real = exp_alcohol / (cpi_alcohol / 100),
+    exp_other_real = exp_other / (cpi_general / 100),
+    income_total_real = income_total / (cpi_general / 100),
+    # Recalculate total real consumption from real components
+    exp_total_consumption_real = exp_food_real +
+      exp_tobacco_real +
+      exp_alcohol_real +
+      exp_other_real
+  )
+
+unicef_final <- unicef_24_processed %>%
+  left_join(all_cpi_indexed, by = c("region", "period_id")) %>%
+  mutate(
+    exp_food_real = exp_food / (cpi_general / 100),
+    exp_tobacco_alcohol_real = exp_tobacco_alcohol / (cpi_t_a / 100),
+    exp_other_real = exp_other / (cpi_general / 100),
+    income_total_real = income_total / (cpi_general / 100),
+    # Recalculate total real consumption from real components
+    exp_total_consumption_real = exp_food_real +
+      exp_tobacco_alcohol_real +
+      exp_other_real
+  )
+
+
+ssu_final <- ssu_final %>%
+  mutate(
+    w_food = exp_food_real / exp_total_consumption_real,
+    w_tobacco = exp_tobacco_real / exp_total_consumption_real,
+    w_alcohol = exp_alcohol_real / exp_total_consumption_real,
+    w_other = exp_other_real / exp_total_consumption_real
+  )
+
+unicef_final <- unicef_final %>%
+  mutate(
+    w_food = exp_food_real / exp_total_consumption_real,
+    w_tobacco_alcohol = exp_tobacco_alcohol_real / exp_total_consumption_real,
+    w_other = exp_other_real / exp_total_consumption_real
   )
