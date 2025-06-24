@@ -127,9 +127,8 @@ all_cpi_indexed <- all_cpi_indexed %>%
     cpi_alcohol = coalesce(cpi_alcohol, national_cpi_alcohol),
     cpi_tobacco = coalesce(cpi_tobacco, national_cpi_tobacco)
   ) %>%
-  # Clean up the temporary national columns and filter out the national aggregate row
-  select(-national_cpi_alcohol, -national_cpi_tobacco) %>%
-  filter(region != "Україна")
+  # Clean up the temporary national columns
+  select(-national_cpi_alcohol, -national_cpi_tobacco)
 
 
 ### Load and process the average price data ###
@@ -259,17 +258,29 @@ deflate_prices <- function(price_data, cpi_data, category_name) {
 
 tobacco_real_prices <- quarterly_avg_prices %>%
   dplyr::filter(product_category == "tobacco") %>%
-  deflate_prices(tobacco_periods, "tobacco")
+  deflate_prices(
+    all_cpi_indexed %>%
+      select(region, period_id, cpi_indexed = cpi_tobacco),
+    "tobacco"
+  )
 
 alcohol_real_prices <- quarterly_avg_prices %>%
   dplyr::filter(product_category == "alcohol") %>%
-  deflate_prices(alc_periods, "alcohol")
+  deflate_prices(
+    all_cpi_indexed %>%
+      select(region, period_id, cpi_indexed = cpi_alcohol),
+    "alcohol"
+  )
 
 t_and_a_real_prices <- quarterly_avg_prices %>%
   dplyr::filter(
     product_category == "tobacco" | product_category == "alcohol"
   ) %>%
-  deflate_prices(t_and_a_periods, "tobacco & alcohol")
+  deflate_prices(
+    all_cpi_indexed %>%
+      select(region, period_id, cpi_indexed = cpi_t_a),
+    "tobacco & alcohol"
+  )
 
 # Combine all real prices
 all_real_prices <- bind_rows(
@@ -284,13 +295,12 @@ price_summary <- all_real_prices %>%
   summarise(
     avg_real_price = mean(real_price, na.rm = TRUE),
     avg_nominal_price = mean(avg_nominal_price, na.rm = TRUE),
-    n_products = n_distinct(product),
+    n_products = n_distinct(product_category),
     .groups = 'drop'
   )
 
-# National level summary (Ukraine as a whole)
+# National level summary (Ukraine as a whole) - aggregate from all regions
 national_price_summary <- all_real_prices %>%
-  dplyr::filter(region == "Україна") %>%
   group_by(price_category, period_id) %>%
   summarise(
     avg_real_price = mean(real_price, na.rm = TRUE),
