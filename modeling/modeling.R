@@ -665,7 +665,13 @@ print("--- Estimating UNICEF Tobacco+Alcohol AIDS Model ---")
 
 # Tobacco+alcohol budget share equation for UNICEF data
 unicef_ta_eq <- wTA ~
-  log_p_ta + log_p_other + log_real_exp + log_hh_size + has_children_dum + urban
+  log_p_ta +
+    log_p_other +
+    log_real_exp +
+    log_hh_size +
+    has_children_dum +
+    urban +
+    is_idp_dum
 
 # Estimate single equation model (other equation is residual)
 unicef_model <- lm(unicef_ta_eq, data = unicef_clean)
