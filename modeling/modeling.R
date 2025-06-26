@@ -293,7 +293,12 @@ ssu_smokers <- ssu_21_w %>%
   ) %>%
   mutate(head_sex = ifelse(head_sex == 1, "Male", "Female"))
 
+correct_hh_size <- ssu_21_w %>%
+  group_by(code_fam) %>%
+  summarise(hh_size_corrected = max(N_MEMBER, na.rm = TRUE), .groups = 'drop')
+
 ssu_21_processed <- ssu_21_h %>%
+  left_join(correct_hh_size, by = "code_fam") %>%
   left_join(ssu_smokers, by = "code_fam") %>%
   transmute(
     hh_id = as.character(code_fam),
@@ -327,7 +332,7 @@ ssu_21_processed <- ssu_21_h %>%
       TRUE ~ "Інша"
     ),
     settlement_type = ifelse(tp_ns_p %in% c(1, 2), "Urban", "Rural"),
-    hh_size = hsize,
+    hh_size = hh_size_corrected, # Use corrected size instead of hsize
     has_children = ifelse(type_dom == 1, 1, 0),
     head_sex,
     head_age_cat,
@@ -516,3 +521,185 @@ unicef_aids <- prepare_aids_data(
   price_summary,
   is_unicef = TRUE
 )
+
+ssu_clean <- ssu_aids %>%
+  filter(
+    # Remove households with zero or missing total expenditure
+    !is.na(exp_total_consumption_real),
+    exp_total_consumption_real > 0,
+    # Remove households with missing location data (needed for price variation)
+    !is.na(region),
+    !is.na(period_id),
+    # Remove households with impossible budget shares
+    !is.na(wTobacco),
+    !is.na(wAlcohol),
+    !is.na(wOther),
+    wTobacco >= 0,
+    wAlcohol >= 0,
+    wOther >= 0,
+    # Budget shares should sum to approximately 1 (allow small rounding errors)
+    abs(wTobacco + wAlcohol + wOther - 1) < 0.01,
+    # Remove households with missing price data
+    !is.na(price_tobacco),
+    !is.na(price_alcohol)
+  )
+
+
+ssu_clean <- ssu_clean %>%
+  mutate(
+    # Log prices for each good category
+    log_p_tobacco = log(price_tobacco_alcohol),
+    log_p_other = log(cpi_general),
+
+    # Create Stone price index: P = Σ w_i * log(p_i)
+    # This is a simpler approximation to the ideal AIDS price index
+    log_P_stone = wTobacco *
+      log_p_tobacco +
+      wAlcohol * price_tobacco_alcohol +
+      wOther * log_p_other,
+
+    # Real expenditure deflated by the Stone price index
+    # This is the key income term in AIDS: log(x/P)
+    log_real_exp = log(exp_total_consumption_real) - log_P_stone,
+
+    # Create demographic control variables
+    log_hh_size = log(hh_size),
+    urban = ifelse(settlement_type == "Urban", 1, 0),
+    has_children_dum = ifelse(has_children == 1, 1, 0),
+    n_smokers_dum = ifelse(n_smokers > 0, 1, 0)
+  )
+
+ssu_clean <- ssu_clean %>%
+  mutate(
+    # Combined tobacco and alcohol budget share
+    wTA_combined = wTobacco + wAlcohol,
+    # Other goods share remains the same
+    wOther_combined = wOther
+  )
+
+ssu_combined_clean <- ssu_clean %>%
+  filter(
+    !is.na(wTA_combined),
+    !is.na(wOther_combined),
+    abs(wTA_combined + wOther_combined - 1) < 0.01
+  ) %>%
+  mutate(
+    # Adjust price index for two-good system
+    log_P_combined = log(price_tobacco_alcohol),
+    log_real_exp_combined = log(exp_total_consumption_real) - log_P_combined
+  )
+
+combined_ta_eq <- wTA_combined ~
+  log_P_combined +
+    log_p_other +
+    log_real_exp_combined +
+    log_hh_size +
+    urban +
+    has_children_dum +
+    n_smokers_dum
+
+# For two-good system, we only need to estimate one equation (other is residual)
+ssu_combined_model <- lm(combined_ta_eq, data = ssu_combined_clean)
+
+# Display results
+print("SSU Combined Tobacco+Alcohol Model Results:")
+summary(ssu_combined_model)
+
+# Calculate elasticities for combined system
+avg_w_ta_combined <- mean(ssu_combined_clean$wTA_combined, na.rm = TRUE)
+
+ssu_combined_coefs <- coef(ssu_combined_model)
+
+# Combined tobacco+alcohol elasticities
+ta_combined_own_price_elast <- (ssu_combined_coefs["log_P_combined"] /
+  avg_w_ta_combined) -
+  1
+ta_combined_income_elast <- (ssu_combined_coefs["log_real_exp_combined"] /
+  avg_w_ta_combined) +
+  1
+
+print("=== SSU 2021 COMBINED TOBACCO+ALCOHOL ELASTICITIES ===")
+print(paste(
+  "Combined tobacco+alcohol own-price elasticity:",
+  round(ta_combined_own_price_elast, 3)
+))
+print(paste(
+  "Combined tobacco+alcohol income elasticity:",
+  round(ta_combined_income_elast, 3)
+))
+
+
+unicef_clean <- unicef_aids %>%
+  filter(
+    # Basic data quality filters
+    !is.na(exp_total_consumption_real),
+    exp_total_consumption_real > 0,
+    !is.na(region),
+    !is.na(period_id),
+    # UNICEF has only two categories: tobacco+alcohol combined, and other
+    !is.na(wTA),
+    !is.na(wOther),
+    wTA >= 0,
+    wOther >= 0,
+    abs(wTA + wOther - 1) < 0.01,
+    # Need price data for estimation
+    !is.na(price_tobacco_alcohol)
+  )
+
+print(paste("UNICEF dataset: Cleaned to", nrow(unicef_clean), "households"))
+
+# Create log price variables for UNICEF two-good system
+unicef_clean <- unicef_clean %>%
+  mutate(
+    # Log prices - UNICEF only has combined tobacco+alcohol price
+    log_p_ta = log(price_tobacco_alcohol),
+    log_p_other = log(cpi_general),
+
+    # Stone price index for two-good system
+    log_P_stone = wTA * log_p_ta + wOther * log_p_other,
+
+    # Real expenditure deflated by price index
+    log_real_exp = log(exp_total_consumption_real) - log_P_stone,
+
+    # Demographic controls (UNICEF has different variables than SSU)
+    log_hh_size = log(hh_size),
+    urban = ifelse(settlement_type == "Urban", 1, 0),
+    has_children_dum = ifelse(has_children == 1, 1, 0),
+    # UNICEF doesn't have smoker count, so we use IDP status as additional control
+    is_idp_dum = ifelse(is_idp == 1, 1, 0)
+  ) %>%
+  filter(wTA < 0.51)
+
+### UNICEF ESTIMATION: Two-good AIDS model (Tobacco+Alcohol, Other) ###
+
+print("--- Estimating UNICEF Tobacco+Alcohol AIDS Model ---")
+
+# Tobacco+alcohol budget share equation for UNICEF data
+unicef_ta_eq <- wTA ~
+  log_p_ta + log_p_other + log_real_exp + log_hh_size + has_children_dum
+
+# Estimate single equation model (other equation is residual)
+unicef_model <- lm(unicef_ta_eq, data = unicef_clean)
+
+# Display estimation results
+print("UNICEF 2024 Tobacco+Alcohol Model Results:")
+summary(unicef_model)
+
+# Calculate elasticities for UNICEF data
+avg_w_ta_unicef <- mean(unicef_clean$wTA, na.rm = TRUE)
+
+unicef_coefs <- coef(unicef_model)
+
+# UNICEF tobacco+alcohol elasticities
+unicef_ta_own_price_elast <- (unicef_coefs["log_p_ta"] / avg_w_ta_unicef) - 1
+unicef_ta_income_elast <- (unicef_coefs["log_real_exp"] / avg_w_ta_unicef) + 1
+
+print("=== UNICEF 2024 TOBACCO+ALCOHOL ELASTICITIES ===")
+print(paste(
+  "Tobacco+alcohol own-price elasticity:",
+  round(unicef_ta_own_price_elast, 3)
+))
+print(paste(
+  "Tobacco+alcohol income elasticity:",
+  round(unicef_ta_income_elast, 3)
+))
