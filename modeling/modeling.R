@@ -103,9 +103,7 @@ calculate_mixed_periods_regional <- function(monthly_cpi_data) {
 # Create indexed CPI for each category
 categories <- list(
   "Індекс споживчих цін" = "cpi_general",
-  "Алкогольні напої, тютюнові вироби" = "cpi_t_a",
-  "Алкогольні напої" = "cpi_alcohol",
-  "Тютюнові вироби" = "cpi_tobacco"
+  "Алкогольні напої, тютюнові вироби" = "cpi_t_a"
 )
 
 all_cpi_indexed <- names(categories) %>%
@@ -241,14 +239,14 @@ deflate_prices <- function(price_data, cpi_data, category_name) {
 tobacco_real_prices <- quarterly_avg_prices %>%
   filter(product_category == "tobacco") %>%
   deflate_prices(
-    all_cpi_indexed %>% select(region, period_id, cpi_rebased = cpi_tobacco),
+    all_cpi_indexed %>% select(region, period_id, cpi_rebased = cpi_t_a),
     "tobacco"
   )
 
 alcohol_real_prices <- quarterly_avg_prices %>%
   filter(product_category == "alcohol") %>%
   deflate_prices(
-    all_cpi_indexed %>% select(region, period_id, cpi_rebased = cpi_alcohol),
+    all_cpi_indexed %>% select(region, period_id, cpi_rebased = cpi_t_a),
     "alcohol"
   )
 
@@ -496,8 +494,8 @@ prepare_aids_data <- function(df, cpi_df, price_df, is_unicef = FALSE) {
   } else {
     df <- df %>%
       mutate(
-        exp_tobacco_real = exp_tobacco / (cpi_tobacco / 100),
-        exp_alcohol_real = exp_alcohol / (cpi_alcohol / 100),
+        exp_tobacco_real = exp_tobacco / (cpi_t_a / 100),
+        exp_alcohol_real = exp_alcohol / (cpi_t_a / 100),
         exp_other_real = exp_other / (cpi_general / 100) # 'other' now includes food
       ) %>%
       mutate(
@@ -514,7 +512,13 @@ prepare_aids_data <- function(df, cpi_df, price_df, is_unicef = FALSE) {
   return(df)
 }
 
-ssu_aids <- prepare_aids_data(ssu_21_processed, all_cpi_indexed, price_summary)
+ssu_aids <- prepare_aids_data(
+  ssu_21_processed,
+  all_cpi_indexed,
+  price_summary
+)
+
+
 unicef_aids <- prepare_aids_data(
   unicef_24_processed,
   all_cpi_indexed,
@@ -547,15 +551,15 @@ ssu_clean <- ssu_aids %>%
 
 ssu_clean <- ssu_clean %>%
   mutate(
+    wTA_combined = wTobacco + wAlcohol,
     # Log prices for each good category
-    log_p_tobacco = log(price_tobacco_alcohol),
+    log_P_combined = log(price_tobacco_alcohol),
     log_p_other = log(cpi_general),
 
     # Create Stone price index: P = Σ w_i * log(p_i)
     # This is a simpler approximation to the ideal AIDS price index
-    log_P_stone = wTobacco *
-      log_p_tobacco +
-      wAlcohol * price_tobacco_alcohol +
+    log_P_stone = wTA_combined *
+      log_P_combined +
       wOther * log_p_other,
 
     # Real expenditure deflated by the Stone price index
@@ -567,26 +571,11 @@ ssu_clean <- ssu_clean %>%
     urban = ifelse(settlement_type == "Urban", 1, 0),
     has_children_dum = ifelse(has_children == 1, 1, 0),
     n_smokers_dum = ifelse(n_smokers > 0, 1, 0)
-  )
-
-ssu_clean <- ssu_clean %>%
-  mutate(
-    # Combined tobacco and alcohol budget share
-    wTA_combined = wTobacco + wAlcohol,
-    # Other goods share remains the same
-    wOther_combined = wOther
-  )
-
-ssu_combined_clean <- ssu_clean %>%
+  ) %>%
   filter(
     !is.na(wTA_combined),
-    !is.na(wOther_combined),
-    abs(wTA_combined + wOther_combined - 1) < 0.01
-  ) %>%
-  mutate(
-    # Adjust price index for two-good system
-    log_P_combined = log(price_tobacco_alcohol),
-    log_real_exp_combined = log(exp_total_consumption_real) - log_P_combined
+    !is.na(wOther),
+    abs(wTA_combined + wOther - 1) < 0.01
   )
 
 combined_ta_eq <- wTA_combined ~
@@ -663,7 +652,7 @@ unicef_clean <- unicef_clean %>%
 
     # Demographic controls (UNICEF has different variables than SSU)
     log_hh_size = log(hh_size),
-    urban = ifelse(settlement_type == "Urban", 1, 0),
+    urban = ifelse(settlement_type == "urban", 1, 0),
     has_children_dum = ifelse(has_children == 1, 1, 0),
     # UNICEF doesn't have smoker count, so we use IDP status as additional control
     is_idp_dum = ifelse(is_idp == 1, 1, 0)
@@ -676,7 +665,7 @@ print("--- Estimating UNICEF Tobacco+Alcohol AIDS Model ---")
 
 # Tobacco+alcohol budget share equation for UNICEF data
 unicef_ta_eq <- wTA ~
-  log_p_ta + log_p_other + log_real_exp + log_hh_size + has_children_dum
+  log_p_ta + log_p_other + log_real_exp + log_hh_size + has_children_dum + urban
 
 # Estimate single equation model (other equation is residual)
 unicef_model <- lm(unicef_ta_eq, data = unicef_clean)
