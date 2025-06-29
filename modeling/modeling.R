@@ -15,7 +15,8 @@ pacman::p_load(
   car, # For deltaMethod to calculate standard errors
   sandwich, # For robust standard errors
   lmtest, # For coeftest
-  lubridate # For date manipulation
+  lubridate, # For date manipulation
+  stargazer # For creating summary tables
 )
 
 p_loaded() # Inspect loaded packages
@@ -116,24 +117,6 @@ all_cpi_indexed <- names(categories) %>%
     }
   ) %>%
   reduce(full_join, by = c("region", "period_id"))
-
-# Extract national-level data to be used as a fallback for missing regional data
-national_fallback_cpi <- all_cpi_indexed %>%
-  filter(region == "Україна") %>%
-  select(
-    period_id,
-    national_cpi_alcohol = cpi_alcohol,
-    national_cpi_tobacco = cpi_tobacco
-  )
-
-# Join the national fallbacks and use coalesce to fill in NAs directly
-all_cpi_indexed <- all_cpi_indexed %>%
-  left_join(national_fallback_cpi, by = "period_id") %>%
-  mutate(
-    cpi_alcohol = coalesce(cpi_alcohol, national_cpi_alcohol),
-    cpi_tobacco = coalesce(cpi_tobacco, national_cpi_tobacco)
-  ) %>%
-  select(-national_cpi_alcohol, -national_cpi_tobacco)
 
 ### Load and process the average price data ###
 
@@ -581,21 +564,21 @@ ssu_clean <- ssu_clean %>%
 combined_ta_eq <- wTA_combined ~
   log_P_combined +
     log_p_other +
-    log_real_exp_combined +
+    log_real_exp +
     log_hh_size +
     urban +
     has_children_dum +
     n_smokers_dum
 
 # For two-good system, we only need to estimate one equation (other is residual)
-ssu_combined_model <- lm(combined_ta_eq, data = ssu_combined_clean)
+ssu_combined_model <- lm(combined_ta_eq, data = ssu_clean)
 
 # Display results
 print("SSU Combined Tobacco+Alcohol Model Results:")
 summary(ssu_combined_model)
 
 # Calculate elasticities for combined system
-avg_w_ta_combined <- mean(ssu_combined_clean$wTA_combined, na.rm = TRUE)
+avg_w_ta_combined <- mean(ssu_clean$wTA_combined, na.rm = TRUE)
 
 ssu_combined_coefs <- coef(ssu_combined_model)
 
@@ -603,7 +586,7 @@ ssu_combined_coefs <- coef(ssu_combined_model)
 ta_combined_own_price_elast <- (ssu_combined_coefs["log_P_combined"] /
   avg_w_ta_combined) -
   1
-ta_combined_income_elast <- (ssu_combined_coefs["log_real_exp_combined"] /
+ta_combined_income_elast <- (ssu_combined_coefs["log_real_exp"] /
   avg_w_ta_combined) +
   1
 
@@ -698,3 +681,56 @@ print(paste(
   "Tobacco+alcohol income elasticity:",
   round(unicef_ta_income_elast, 3)
 ))
+
+### Summary of Results ###
+
+stargazer::stargazer(
+  ssu_combined_model,
+  unicef_model,
+  type = "text",
+  title = "Summary of Regression Results",
+  column.labels = c("SSU 2021", "UNICEF 2024")
+)
+
+### Combined Elasticities Table ###
+elasticity_results <- data.frame(
+  Elasticity = c("Own-Price Elasticity", "Income Elasticity"),
+  SSU_2021 = c(
+    round(ta_combined_own_price_elast, 3),
+    round(ta_combined_income_elast, 3)
+  ),
+  UNICEF_2024 = c(
+    round(unicef_ta_own_price_elast, 3),
+    round(unicef_ta_income_elast, 3)
+  )
+)
+
+# Display combined elasticities table using stargazer
+stargazer(
+  elasticity_results,
+  type = "text",
+  title = "Tobacco and Alcohol Demand Elasticities: Comparison Across Years",
+  summary = FALSE,
+  rownames = FALSE,
+  column.labels = c("Elasticity Type", "SSU 2021", "UNICEF 2024")
+)
+
+### Save the summary tables ###
+
+#stargazer::stargazer(
+#  ssu_combined_model,
+#  unicef_model,
+#  type = "html",
+#  title = "Summary of Regression Results",
+#  column.labels = c("SSU 2021", "UNICEF 2024"),
+#  out = "modeling_results.html"
+#)
+
+#stargazer(elasticity_results,
+#  type = "html",
+#  title = "Tobacco and Alcohol Demand Elasticities: Comparison Across Years",
+#  summary = FALSE,
+#  rownames = FALSE,
+#  column.labels = c("Elasticity Type", "SSU 2021", "UNICEF 2024"),
+#  out = "elasticity_results.html"
+#)
